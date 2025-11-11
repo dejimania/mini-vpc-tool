@@ -66,7 +66,8 @@ add_subnet() {
     local bridge=$(grep "BRIDGE=" "$VPC_DIR/$vpc_name.conf" | cut -d= -f2)
     local ns_name="ns-$vpc_name-$subnet_name"
     local veth_br="veth-$vpc_name-$subnet_name"
-    local veth_ns="eth0"
+    local veth_br="vbr-${vpc_name:0:4}-${subnet_name:0:2}"
+    local veth_ns="vns-${vpc_name:0:4}-${subnet_name:0:2}"
     
     if ip netns list | grep -q "^$ns_name"; then
         log_error "Subnet namespace $ns_name already exists"
