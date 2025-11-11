@@ -18,12 +18,53 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# Compute the gateway IP (first usable address in the subnet)
 get_gateway_ip() {
-    echo "$1" | sed 's/\.[0-9]*\//.1/'
+    local cidr=$1
+    if [[ -z "$cidr" ]]; then
+        echo "Error: get_gateway_ip() requires a CIDR" >&2
+        return 1
+    fi
+
+    # Split IP and prefix
+    local ip prefix base_ip
+    ip=$(echo "$cidr" | cut -d'/' -f1)
+    prefix=$(echo "$cidr" | cut -d'/' -f2)
+
+    # Convert IP to integer
+    IFS=. read -r o1 o2 o3 o4 <<< "$ip"
+    local ip_int=$(( (o1<<24) + (o2<<16) + (o3<<8) + o4 ))
+
+    # Gateway = first usable address (network + 1)
+    local gw_int=$(( ip_int + 1 ))
+
+    # Convert back to dotted decimal
+    local gw_ip="$(( (gw_int>>24)&255 )).$(( (gw_int>>16)&255 )).$(( (gw_int>>8)&255 )).$(( gw_int&255 ))"
+
+    echo "${gw_ip}/${prefix}"
 }
 
+# Compute host IP (second usable address)
 get_host_ip() {
-    echo "$1" | sed 's/\.[0-9]*\//.2/'
+    local cidr=$1
+    if [[ -z "$cidr" ]]; then
+        echo "Error: get_host_ip() requires a CIDR" >&2
+        return 1
+    fi
+
+    local ip prefix base_ip
+    ip=$(echo "$cidr" | cut -d'/' -f1)
+    prefix=$(echo "$cidr" | cut -d'/' -f2)
+
+    IFS=. read -r o1 o2 o3 o4 <<< "$ip"
+    local ip_int=$(( (o1<<24) + (o2<<16) + (o3<<8) + o4 ))
+
+    # Host IP = network + 2
+    local host_int=$(( ip_int + 2 ))
+
+    local host_ip="$(( (host_int>>24)&255 )).$(( (host_int>>16)&255 )).$(( (host_int>>8)&255 )).$(( host_int&255 ))"
+
+    echo "${host_ip}/${prefix}"
 }
 
 create_vpc() {
@@ -93,8 +134,8 @@ add_subnet() {
     local host_ip=$(get_host_ip "$subnet_cidr")
     
     log_info "Assigning IP $host_ip to $veth_ns in namespace"
-    ip netns exec "$ns_name" ip addr add "$host_ip" dev "$veth_ns"
     ip netns exec "$ns_name" ip link set "$veth_ns" up
+    ip netns exec "$ns_name" ip addr add "$host_ip" dev "$veth_ns"
     ip netns exec "$ns_name" ip link set lo up
     
     log_info "Configuring default route via $gateway"
