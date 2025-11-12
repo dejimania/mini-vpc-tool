@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Building Your Own VPC on Linux - A Complete Guide</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; line-height: 1.7; background: #f8f9fa; color: #333; }
+        .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 15px rgba(0,0,0,0.1); }
+        h1 { color: #2c3e50; font-size: 2.5em; margin-bottom: 10px; border-bottom: 4px solid #3498db; padding-bottom: 15px; }
+        .subtitle { color: #7f8c8d; font-size: 1.2em; margin-bottom: 30px; }
+        h2 { color: #34495e; margin-top: 40px; font-size: 1.8em; border-left: 5px solid #3498db; padding-left: 15px; }
+        h3 { color: #555; margin-top: 25px; }
+        .intro { background: #e8f4f8; padding: 20px; border-radius: 8px; border-left: 5px solid #3498db; margin: 25px 0; }
+        .command-box { background: #2c3e50; color: #2ecc71; padding: 15px; border-radius: 5px; margin: 15px 0; font-family: 'Courier New', monospace; overflow-x: auto; }
+        .output-box { background: #f8f9fa; border-left: 4px solid #6c757d; padding: 15px; margin: 15px 0; font-family: monospace; font-size: 0.9em; }
+        code { background: #ecf0f1; padding: 3px 7px; border-radius: 3px; font-family: 'Courier New', monospace; color: #c7254e; }
+        .tip { background: #fff3cd; padding: 15px; border-radius: 5px; border-left: 4px solid #ffc107; margin: 20px 0; }
+        .warning { background: #f8d7da; padding: 15px; border-radius: 5px; border-left: 4px solid #dc3545; margin: 20px 0; }
+        .success { background: #d4edda; padding: 15px; border-radius: 5px; border-left: 4px solid #28a745; margin: 20px 0; }
+        .diagram { background: white; padding: 20px; border: 2px solid #3498db; border-radius: 8px; margin: 25px 0; text-align: center; }
+        .step { background: #f0f8ff; padding: 20px; margin: 20px 0; border-radius: 8px; border-left: 5px solid #3498db; }
+        .step-number { background: #3498db; color: white; padding: 5px 15px; border-radius: 20px; font-weight: bold; display: inline-block; margin-bottom: 10px; }
+        ul { line-height: 2; }
+        li { margin: 10px 0; }
+        pre { margin: 0; white-space: pre-wrap; }
+        .architecture { font-family: monospace; background: #f8f9fa; padding: 20px; border-radius: 5px; line-height: 1.8; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌐 Building Your Own VPC on Linux</h1>
+        <p class="subtitle">Learn how cloud networking works by recreating AWS VPC using Linux primitives</p>
+
+        <div class="intro">
+            <h3>What You'll Learn</h3>
+            <p>In this tutorial, you'll build a mini Virtual Private Cloud (VPC) from scratch using Linux network namespaces, bridges, and iptables. By the end, you'll understand how cloud providers like AWS implement VPCs under the hood.</p>
+            <p><strong>Time Required:</strong> 30-45 minutes | <strong>Difficulty:</strong> Intermediate</p>
+        </div>
+
+        <h2>📖 Project Overview</h2>
+        <p>A VPC (Virtual Private Cloud) is an isolated network environment in the cloud. This project recreates VPC functionality using:</p>
+        <ul>
+            <li><strong>Network Namespaces:</strong> Isolated network environments (subnets)</li>
+            <li><strong>Linux Bridge:</strong> Virtual switch connecting subnets (VPC router)</li>
+            <li><strong>Veth Pairs:</strong> Virtual cables connecting namespaces to bridge</li>
+            <li><strong>iptables:</strong> Firewall rules and NAT for internet access</li>
+        </ul>
+
+        <h3>What We'll Build</h3>
+        <ul>
+            <li>✅ Create isolated VPCs with custom IP ranges</li>
+            <li>✅ Add public and private subnets</li>
+            <li>✅ Enable internet access via NAT gateway</li>
+            <li>✅ Connect multiple VPCs with peering</li>
+            <li>✅ Apply security policies with firewall rules</li>
+        </ul>
+
+        <h2>🏗️ Architecture Diagram</h2>
+        <div class="diagram">
+            <div class="architecture">
+┌─────────────────────────────────────────────────────────────┐
+│                         VPC (10.0.0.0/16)                   │
+│                                                             │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │           Linux Bridge (br-prodvpc)                │     │
+│  │              VPC Router (10.0.1.1, 10.0.2.1)       │     │
+│  └────────┬──────────────────────────────┬────────────┘     │
+│           │                              │                  │
+│    ┌──────▼──────┐              ┌────────▼──────┐           │
+│    │ veth pair   │              │  veth pair    │           │
+│    └──────┬──────┘              └────────┬──────┘           │
+│           │                              │                  │
+│  ┌────────▼────────────┐      ┌─────────▼──────────────┐    │
+│  │  Public Subnet      │      │  Private Subnet        │    │
+│  │  (ns-prodvpc-public)│      │  (ns-prodvpc-private)  │    │
+│  │  10.0.1.0/24        │      │  10.0.2.0/24           │    │
+│  │  IP: 10.0.1.2       │      │  IP: 10.0.2.2          │    │
+│  └─────────┬───────────┘      └────────────────────────┘    │
+│            │                                                │
+└────────────┼────────────────────────────────────────────────┘
+             │
+        ┌────▼─────┐
+        │   NAT    │ (iptables MASQUERADE)
+        └────┬─────┘
+             │
+        ┌────▼─────┐
+        │ Internet │
+        └──────────┘
+            </div>
+        </div>
+
+        <h2>🚀 Getting Started</h2>
+
+        <h3>Prerequisites</h3>
+        <div class="command-box">sudo apt update
+sudo apt install -y iproute2 iptables</div>
+
+        <div class="tip">
+            <strong>💡 Tip:</strong> You need root privileges for all commands. Make sure you're running on a Linux system with kernel support for network namespaces.
+        </div>
+
+        <h3>Download the Tool</h3>
+        <div class="command-box">chmod +x vpcctl.sh</div>
+
+        <h2>📝 CLI Usage Guide</h2>
+
+        <div class="step">
+            <span class="step-number">Step 1</span>
+            <h3>Create Your First VPC</h3>
+            <p>Create a VPC named "myvpc" with CIDR block 10.0.0.0/16:</p>
+            <div class="command-box">sudo ./vpcctl.sh create myvpc 10.0.0.0/16</div>
+            <div class="output-box"><span style="color: #3498db;">[INFO]</span> Creating VPC: myvpc with CIDR: 10.0.0.0/16
+<span style="color: #27ae60;">[SUCCESS]</span> Bridge br-myvpc created and activated
+<span style="color: #27ae60;">[SUCCESS]</span> VPC myvpc created successfully</div>
+            <p><strong>What happened?</strong> A Linux bridge named <code>br-myvpc</code> was created to act as your VPC router.</p>
+        </div>
+
+        <div class="step">
+            <span class="step-number">Step 2</span>
+            <h3>Add a Public Subnet</h3>
+            <p>Add a public subnet that will have internet access:</p>
+            <div class="command-box">sudo ./vpcctl.sh add-subnet myvpc public 10.0.1.0/24 public</div>
+            <div class="output-box"><span style="color: #3498db;">[INFO]</span> Adding subnet: public (public) to VPC: myvpc
+<span style="color: #3498db;">[INFO]</span> Creating namespace: ns-myvpc-public
+<span style="color: #3498db;">[INFO]</span> Creating veth pair: veth-myvpc-public &lt;-&gt; eth0
+<span style="color: #3498db;">[INFO]</span> Assigning IP 10.0.1.2 to eth0 in namespace
+<span style="color: #27ae60;">[SUCCESS]</span> Subnet public added successfully</div>
+            <p><strong>What happened?</strong> A network namespace was created with IP 10.0.1.2, connected to the bridge via a veth pair.</p>
+        </div>
+
+        <div class="step">
+            <span class="step-number">Step 3</span>
+            <h3>Add a Private Subnet</h3>
+            <p>Add a private subnet without internet access:</p>
+            <div class="command-box">sudo ./vpcctl.sh add-subnet myvpc private 10.0.2.0/24 private</div>
+            <p><strong>What happened?</strong> Another isolated namespace created at 10.0.2.2, can communicate with public subnet but not the internet.</p>
+        </div>
+
+        <div class="step">
+            <span class="step-number">Step 4</span>
+            <h3>Enable NAT for Internet Access</h3>
+            <p>Enable NAT on the public subnet (replace <code>eth0</code> with your internet interface):</p>
+            <div class="command-box">sudo ./vpcctl.sh enable-nat myvpc public eth0</div>
+            <div class="output-box"><span style="color: #3498db;">[INFO]</span> Enabling NAT for subnet: public via interface: eth0
+<span style="color: #3498db;">[INFO]</span> Configuring NAT rules for 10.0.1.0/24
+<span style="color: #27ae60;">[SUCCESS]</span> NAT enabled for subnet public</div>
+            <p><strong>What happened?</strong> iptables rules configured to masquerade traffic from 10.0.1.0/24, allowing internet access.</p>
+        </div>
+
+        <div class="step">
+            <span class="step-number">Step 5</span>
+            <h3>List All VPCs</h3>
+            <div class="command-box">sudo ./vpcctl.sh list</div>
+            <div class="output-box"><span style="color: #27ae60;">VPC:</span> myvpc <span style="color: #3498db;">CIDR:</span> 10.0.0.0/16
+  <span style="color: #f39c12;">Subnet:</span> public <span style="color: #3498db;">CIDR:</span> 10.0.1.0/24
+  <span style="color: #f39c12;">Subnet:</span> private <span style="color: #3498db;">CIDR:</span> 10.0.2.0/24</div>
+        </div>
+
+        <h2>🧪 Testing and Validation</h2>
+
+        <h3>Test 1: Connectivity to Gateway</h3>
+        <p>Verify the subnet can reach its gateway:</p>
+        <div class="command-box">sudo ip netns exec ns-myvpc-public ping -c 3 10.0.1.1</div>
+        <div class="success">
+            <strong>✓ Expected Result:</strong> Successful ping responses from 10.0.1.1 (the bridge/gateway)
+        </div>
+
+        <h3>Test 2: Internet Connectivity (NAT)</h3>
+        <p>Test if the public subnet can reach the internet:</p>
+        <div class="command-box">sudo ip netns exec ns-myvpc-public ping -c 3 8.8.8.8
+sudo ip netns exec ns-myvpc-public curl -I https://google.com</div>
+        <div class="success">
+            <strong>✓ Expected Result:</strong> Successful ping to 8.8.8.8 and HTTP response from Google
+        </div>
+
+        <h3>Test 3: Inter-Subnet Communication</h3>
+        <p>Verify subnets can communicate with each other:</p>
+        <div class="command-box">sudo ip netns exec ns-myvpc-public ping -c 3 10.0.2.2</div>
+        <div class="success">
+            <strong>✓ Expected Result:</strong> Successful ping to private subnet (10.0.2.2)
+        </div>
+
+        <h3>Test 4: Private Subnet Isolation</h3>
+        <p>Confirm private subnet has NO internet access:</p>
+        <div class="command-box">sudo ip netns exec ns-myvpc-private ping -c 3 8.8.8.8</div>
+        <div class="success">
+            <strong>✓ Expected Result:</strong> Ping should timeout/fail (no internet access)
+        </div>
+
+        <h3>Test 5: Deploy a Web Server</h3>
+        <p>Run a simple web server inside the public subnet:</p>
+        <div class="command-box">sudo ip netns exec ns-myvpc-public python3 -m http.server 8080 &</div>
+        <p>Access it from the private subnet:</p>
+        <div class="command-box">sudo ip netns exec ns-myvpc-private curl http://10.0.1.2:8080</div>
+        <div class="success">
+            <strong>✓ Expected Result:</strong> HTML response from the web server
+        </div>
+
+        <h2>🔒 Security Policies</h2>
+
+        <h3>Create a Security Policy</h3>
+        <p>Create a JSON file to define firewall rules:</p>
+        <div class="command-box">cat &gt; web-policy.json &lt;&lt;EOF
+{
+  "subnet": "10.0.1.0/24",
+  "ingress": [
+    {"port": 80, "protocol": "tcp", "action": "allow"},
+    {"port": 443, "protocol": "tcp", "action": "allow"},
+    {"port": 22, "protocol": "tcp", "action": "deny"}
+  ]
+}
+EOF</div>
+
+        <h3>Apply the Policy</h3>
+        <div class="command-box">sudo ./vpcctl.sh apply-policy myvpc public web-policy.json</div>
+        <div class="output-box"><span style="color: #3498db;">[INFO]</span> Applying security policy to subnet: public
+<span style="color: #3498db;">[INFO]</span> Allowing tcp port 80
+<span style="color: #3498db;">[INFO]</span> Allowing tcp port 443
+<span style="color: #3498db;">[INFO]</span> Denying tcp port 22
+<span style="color: #27ae60;">[SUCCESS]</span> Security policy applied to public</div>
+
+        <h2>🔗 VPC Peering</h2>
+
+        <h3>Create a Second VPC</h3>
+        <div class="command-box">sudo ./vpcctl.sh create vpc2 10.1.0.0/16
+sudo ./vpcctl.sh add-subnet vpc2 app 10.1.1.0/24 public</div>
+
+        <h3>Test Isolation (Before Peering)</h3>
+        <div class="command-box">sudo ip netns exec ns-vpc2-app ping -c 2 10.0.1.2</div>
+        <div class="warning">
+            <strong>⚠ Expected Result:</strong> Ping should fail - VPCs are isolated by default
+        </div>
+
+        <h3>Establish Peering</h3>
+        <div class="command-box">sudo ./vpcctl.sh peer myvpc vpc2</div>
+
+        <h3>Test Cross-VPC Communication (After Peering)</h3>
+        <div class="command-box">sudo ip netns exec ns-vpc2-app ping -c 2 10.0.1.2</div>
+        <div class="success">
+            <strong>✓ Expected Result:</strong> Ping now succeeds - VPCs can communicate
+        </div>
+
+        <h2>🧹 Cleanup</h2>
+
+        <h3>Delete Individual VPC</h3>
+        <div class="command-box">sudo ./vpcctl.sh delete myvpc</div>
+        <div class="output-box"><span style="color: #3498db;">[INFO]</span> Deleting VPC: myvpc
+<span style="color: #3498db;">[INFO]</span> Removing NAT rules
+<span style="color: #3498db;">[INFO]</span> Deleting namespaces
+<span style="color: #3498db;">[INFO]</span> Deleting bridge: br-myvpc
+<span style="color: #27ae60;">[SUCCESS]</span> VPC myvpc deleted successfully</div>
+
+        <h3>Verify Cleanup</h3>
+        <p>Ensure all resources are removed:</p>
+        <div class="command-box">ip netns list | grep myvpc  # Should return nothing
+ip link show br-myvpc  # Should not exist</div>
+
+        <h3>Delete All VPCs</h3>
+        <div class="command-box">sudo ./vpcctl.sh delete myvpc
+sudo ./vpcctl.sh delete vpc2</div>
+
+        <div class="tip">
+            <strong>💡 Tip:</strong> The tool is idempotent - running delete on a non-existent VPC won't cause errors.
+        </div>
+
+        <h2>🎯 Complete Example Workflow</h2>
+        <div class="command-box">#!/bin/bash
+# Complete VPC setup and test
+
+# 1. Create infrastructure
+sudo ./vpcctl.sh create production 10.0.0.0/16
+sudo ./vpcctl.sh add-subnet production web 10.0.1.0/24 public
+sudo ./vpcctl.sh add-subnet production db 10.0.2.0/24 private
+sudo ./vpcctl.sh enable-nat production web eth0
+
+# 2. Deploy web server
+sudo ip netns exec ns-production-web python3 -m http.server 80 &
+
+# 3. Test connectivity
+sudo ip netns exec ns-production-web ping -c 2 8.8.8.8
+sudo ip netns exec ns-production-db curl http://10.0.1.2:80
+
+# 4. Apply security
+sudo ./vpcctl.sh apply-policy production web web-policy.json
+
+# 5. Cleanup
+sudo ./vpcctl.sh delete production</div>
+
+        <h2>🐛 Troubleshooting</h2>
+
+        <h3>Issue: "Cannot create namespace"</h3>
+        <p><strong>Solution:</strong> Ensure you're running with sudo and your kernel supports namespaces:</p>
+        <div class="command-box">sudo -i
+ls /proc/self/ns/net  # Should exist</div>
+
+        <h3>Issue: "No internet access from public subnet"</h3>
+        <p><strong>Solution:</strong> Check your internet interface name:</p>
+        <div class="command-box">ip route | grep default
+# Use the interface shown (e.g., eth0, ens33, wlan0)</div>
+
+        <h3>Issue: "Ping fails between subnets"</h3>
+        <p><strong>Solution:</strong> Verify bridge is up and IPs are assigned:</p>
+        <div class="command-box">ip link show br-myvpc
+ip addr show br-myvpc</div>
+
+        <h2>📚 Key Concepts Learned</h2>
+        <ul>
+            <li><strong>Network Namespaces:</strong> Isolated network stacks for subnet simulation</li>
+            <li><strong>Linux Bridge:</strong> Layer 2 switch connecting multiple network segments</li>
+            <li><strong>Veth Pairs:</strong> Virtual Ethernet cables connecting namespaces</li>
+            <li><strong>NAT with iptables:</strong> Network Address Translation for internet access</li>
+            <li><strong>Routing Tables:</strong> Automatic route configuration for inter-subnet communication</li>
+            <li><strong>Firewall Rules:</strong> Port-based access control with iptables</li>
+        </ul>
+
+        <h2>🎓 Next Steps</h2>
+        <ul>
+            <li>Add support for multiple availability zones</li>
+            <li>Implement VPN gateway functionality</li>
+            <li>Create a web UI for VPC management</li>
+            <li>Add monitoring and logging capabilities</li>
+            <li>Implement load balancing between subnets</li>
+        </ul>
+
+        <h2>✨ Conclusion</h2>
+        <p>Congratulations! You've built a functional VPC using Linux networking primitives. This project demonstrates the fundamental concepts behind cloud networking that providers like AWS, Azure, and GCP use at scale.</p>
+        
+        <p>You now understand:</p>
+        <ul>
+            <li>How VPCs provide network isolation</li>
+            <li>How subnets are implemented and connected</li>
+            <li>How NAT gateways enable internet access</li>
+            <li>How VPC peering works under the hood</li>
+            <li>How security groups filter traffic</li>
+        </ul>
+
+        <div class="success">
+            <strong>🎉 You've successfully completed the Mini VPC project!</strong> Share your implementation and learnings with the community.
+        </div>
+
+        <p>&copy; <a href="mailto:kamilbalogun1@gmail.com" style="text-decoration: none;">Kamil Balogun</a> 2025</p>
+    </div>
+
+</body>
+
+</html>
