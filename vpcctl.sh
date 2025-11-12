@@ -194,8 +194,8 @@ peer_vpcs() {
     
     local bridge1=$(grep "BRIDGE=" "$VPC_DIR/$vpc1.conf" | cut -d= -f2)
     local bridge2=$(grep "BRIDGE=" "$VPC_DIR/$vpc2.conf" | cut -d= -f2)
-    local veth1="peer-$vpc1-$vpc2"
-    local veth2="peer-$vpc2-$vpc1"
+    local veth1="peer-${vpc1:0:4}-${vpc2:0:4}"
+    local veth2="peer-${vpc2:0:4}-${vpc1:0:4}"
     
     log_info "Creating veth pair for peering: $veth1 <-> $veth2"
     ip link add "$veth1" type veth peer name "$veth2"
